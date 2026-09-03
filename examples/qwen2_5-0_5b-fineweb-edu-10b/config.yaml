@@ -1,0 +1,77 @@
+# ==============================================================================
+# Qwen2.5-0.5B Pretraining Configuration (10B Tokens on FineWeb-Edu)
+# Optimized for 1x NVIDIA H100 SXM5 (~18.5 hours budget)
+# ==============================================================================
+
+# Model Architecture Configuration
+model:
+  name: "qwen2_5_0_5b"
+  vocab_size: 151936
+  embed_dim: 896
+  intermediate_size: 4864
+  num_layers: 24
+  num_heads: 14
+  num_kv_heads: 2
+  max_seq_len: 1024
+  rope_theta: 1000000.0
+  rms_norm_eps: 1.0e-6
+  dropout: 0.0
+  tie_weights: true
+
+# Dataset Configuration
+data:
+  dataset_name: "HuggingFaceFW/fineweb-edu"
+  subset: "sample-10BT"
+  # Path to local NVMe pre-downloaded parquet files
+  data_dir: "./data/fineweb_edu_10bt/sample/10BT"
+  context_length: 1024
+  num_workers: 4
+  pin_memory: true
+  tokenizer_name: "Qwen/Qwen2.5-0.5B"
+
+# Training Configuration
+training:
+  # Calculation:
+  # Effective batch = batch_size (32) * grad_accum (4) = 128 sequences
+  # Tokens per step = 128 sequences * 1024 tokens = 131,072 tokens/step
+  # Total steps for 10 Billion tokens = 10,000,000,000 / 131,072 ≈ 76,293 steps
+  max_steps: 76293
+  batch_size: 32
+  gradient_accumulation_steps: 4
+
+  # Mixed Precision (bfloat16 native on H100)
+  use_amp: true
+  dtype: "bfloat16"
+  device: "cuda"
+
+# Optimizer Configuration
+optimizer:
+  type: "adamw"
+  lr: 3.0e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.1
+  eps: 1.0e-8
+
+# Learning Rate Scheduler (Warmup + Cosine Decay)
+scheduler:
+  type: "warmup_cosine"
+  warmup_steps: 1500     # ~2% of training
+  min_lr: 3.0e-5         # 10% of peak learning rate
+
+# Gradient Clipping
+grad_clip:
+  enabled: true
+  max_norm: 1.0
+
+# Checkpointing Strategy
+checkpoint:
+  checkpoint_dir: "./checkpoints"
+  save_every: 2500       # Checkpoint every ~327M tokens (~35 mins)
+  keep_last_n: 3         # Keep last 3 checkpoints to conserve disk space
+  save_best: true
+
+# Logging Configuration
+logging:
+  log_every: 20
+  log_file: "logs/train.log"
+  metrics_file: "logs/metrics.jsonl"

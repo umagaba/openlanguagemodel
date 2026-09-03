@@ -200,3 +200,6 @@ website/tsconfig.tsbuildinfo
 # Keep website source helpers visible despite the Python template's broad lib/ rule.
 !website/app/lib/
 !website/app/lib/**
+
+# Local testing and scratch directories
+local_test/
