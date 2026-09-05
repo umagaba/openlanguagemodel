@@ -9,6 +9,7 @@ Reference Lecture & Tutorial: [Special Session 01: Open Language Model](https://
 ## 1. Server Environment & Architecture
 
 ### Server Specifications
+
 * **Hardware**: Dedicated NVIDIA H100 / H200 GPU server (80GB+ HBM3).
 * **Software**: Python 3 with PyTorch 2.8+cu128 (CUDA enabled).
 * **OpenLanguageModel (OLM)**: **Pre-installed** in the server environment (`import olm` works out-of-the-box).
@@ -17,6 +18,7 @@ Reference Lecture & Tutorial: [Special Session 01: Open Language Model](https://
 * **Storage**: High-speed local NVMe storage mounted at `/workspace`.
 
 ### Architecture & Compute Budget
+
 * **Model**: [`Qwen2_5_0_5B`](file:///d:/Plaksha_sem7/Course_work/SLM/openlanguagemodel/src/olm/models/alibaba/qwen2.py#L165)
   * Parameters: **490 Million** (`embed_dim=896`, `layers=24`, `heads=14`, `kv_heads=2`, `intermediate_size=4864`, `vocab_size=151936`).
   * Features: Grouped-Query Attention (GQA), SwiGLU, RMSNorm with QKV bias, RoPE ($\theta = 1,000,000$).
@@ -62,9 +64,11 @@ From your laptop terminal:
 ```bash
 ssh -p 21510 TEAM_NAME@global.prd.ga.run.brev.nvidia.com
 ```
+
 When prompted, enter the password sent to your team POC. You will land in `/workspace`.
 
 Navigate to the uploaded project directory:
+
 ```bash
 cd /workspace/qwen2_5-0_5b-fineweb-edu-10b
 ls -la
@@ -78,11 +82,12 @@ ls -la
 > **Always run training inside `tmux`!** If your Wi-Fi disconnects or your laptop goes to sleep, a standard SSH process will be killed. Inside `tmux`, the training will keep running uninterrupted on the H100.
 
 1. **Start the session**:
+
    ```bash
    tmux new -s pretrain
    ```
-
 2. **Useful `tmux` shortcuts**:
+
    * **Detach (leave training running in background)**: Press `Ctrl + B`, release, then press `D`.
    * **Re-attach (check back later)**: `tmux attach -t pretrain`
    * **List sessions**: `tmux ls`
@@ -116,6 +121,7 @@ python -u train.py --config config.yaml
 ```
 
 The script will display:
+
 ```
 ================================================================================
 Qwen2.5-0.5B Pretraining on FineWeb-Edu 10B Tokens
@@ -136,12 +142,14 @@ Target Max Steps:  76,293 steps (~10B tokens)
 Open a second terminal or split your `tmux` pane:
 
 * **Monitor GPU utilization & temperature**:
+
   ```bash
   watch -n 1 nvidia-smi
   ```
-  *(Target: GPU-Util should be 90%–100%, VRAM ~18–25 GB out of 80 GB).*
 
+  *(Target: GPU-Util should be 90%–100%, VRAM ~18–25 GB out of 80 GB).*
 * **Monitor training loss & tokens/sec**:
+
   ```bash
   tail -f logs/train.log
   ```
@@ -151,18 +159,18 @@ Open a second terminal or split your `tmux` pane:
 ### Step 6: Test Generation from the Checkpoint
 
 Checkpoints are saved automatically to `./checkpoints/`:
+
 * `checkpoints/step_*.pt` (saved every 2,500 steps)
-* `checkpoints/best_model.pt`
 * `checkpoints/qwen_0_5b_final.pt`
 
 Test your trained model with `inference.py`:
 
 ```bash
 # 1. Test with a sample prompt
-python inference.py --checkpoint checkpoints/best_model.pt --prompt "The fundamental rules of artificial intelligence safety are"
+python inference.py --checkpoint checkpoints/qwen_0_5b_final.pt --prompt "The fundamental rules of artificial intelligence safety are"
 
 # 2. Interactive chat mode
-python inference.py --checkpoint checkpoints/best_model.pt --interactive
+python inference.py --checkpoint checkpoints/qwen_0_5b_final.pt --interactive
 ```
 
 ---
@@ -174,6 +182,7 @@ If training is ever stopped or the node restarts, resume seamlessly:
 ```bash
 python -u train.py --config config.yaml --resume checkpoints/step_25000.pt
 ```
+
 The script will load the weights, optimizer state, and scaler state, and automatically skip the already processed dataset samples to resume right where it left off.
 
 ---
@@ -205,6 +214,6 @@ qwen2_5-0_5b-fineweb-edu-10b/
 ├── inference.py         # Checkpoint verification & text generation sampler
 ├── README.md            # Complete operational runbook
 ├── data/                # Downloaded FineWeb-Edu 10B parquet files (~35 GB)
-├── checkpoints/         # Model checkpoints (step_*.pt, best_model.pt)
+├── checkpoints/         # Model checkpoints (step_*.pt, qwen_0_5b_final.pt)
 └── logs/                # Text logs and JSON lines metrics
 ```

@@ -68,7 +68,7 @@ checkpoint:
   checkpoint_dir: "./checkpoints"
   save_every: 2500       # Checkpoint every ~327M tokens (~35 mins)
   keep_last_n: 3         # Keep last 3 checkpoints to conserve disk space
-  save_best: true
+  save_best: false        # No validation dataloader is configured in this example
 
 # Logging Configuration
 logging:

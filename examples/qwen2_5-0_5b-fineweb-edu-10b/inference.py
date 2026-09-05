@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="checkpoints/best_model.pt",
+        default="checkpoints/qwen_0_5b_final.pt",
         help="Path to model checkpoint (.pt)",
     )
     parser.add_argument(
