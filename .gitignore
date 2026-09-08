@@ -203,3 +203,10 @@ website/tsconfig.tsbuildinfo
 
 # Local testing and scratch directories
 local_test/
+
+# Large training datasets and logs
+data/
+examples/**/data/
+*.parquet
+**/logs/
+checkpoints/

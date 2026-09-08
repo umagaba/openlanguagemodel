@@ -1,6 +1,9 @@
 # src/olm/data/datasets/hf_dataset.py
 import torch
-from datasets import load_dataset
+try:
+    from datasets import load_dataset
+except ImportError:
+    load_dataset = None
 from typing import Optional, Iterator, Callable, Any, Dict
 from olm.data.datasets.base_dataset import BaseTextDataset
 

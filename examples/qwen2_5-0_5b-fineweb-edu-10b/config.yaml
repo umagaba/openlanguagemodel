@@ -32,12 +32,14 @@ data:
 # Training Configuration
 training:
   # Calculation:
-  # Effective batch = batch_size (32) * grad_accum (4) = 128 sequences
+  # Effective batch = batch_size (8) * grad_accum (16) = 128 sequences
   # Tokens per step = 128 sequences * 1024 tokens = 131,072 tokens/step
   # Total steps for 10 Billion tokens = 10,000,000,000 / 131,072 ≈ 76,293 steps
   max_steps: 76293
-  batch_size: 32
-  gradient_accumulation_steps: 4
+  batch_size: 8
+  gradient_accumulation_steps: 16
+
+  epochs: 5              # Multi-epoch training (prevents stopping early after 1 epoch)
 
   # Mixed Precision (bfloat16 native on H100)
   use_amp: true
@@ -66,9 +68,10 @@ grad_clip:
 # Checkpointing Strategy
 checkpoint:
   checkpoint_dir: "./checkpoints"
-  save_every: 2500       # Checkpoint every ~327M tokens (~35 mins)
-  keep_last_n: 3         # Keep last 3 checkpoints to conserve disk space
+  save_every: 1000       # Checkpoint every ~131M tokens (~34 mins)
+  keep_last_n: 5         # Keep last 5 checkpoints to conserve disk space
   save_best: false        # No validation dataloader is configured in this example
+  final_name: "qwen_0_5b_final_epoch2.pt" # Distinct naming so original qwen_0_5b_final.pt is preserved
 
 # Logging Configuration
 logging:
