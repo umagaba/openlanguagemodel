@@ -206,6 +206,8 @@ local_test/
 
 # Large training datasets and logs
 data/
+!postrain/data/
+!postrain/data/benchmark_questionnaire.jsonl
 examples/**/data/
 *.parquet
 **/logs/
