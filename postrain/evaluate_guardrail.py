@@ -39,6 +39,7 @@ from pathlib import Path
 from collections import Counter, defaultdict
 from typing import Dict, Any, List, Tuple
 
+import math
 import torch
 from tqdm import tqdm
 
@@ -100,6 +101,18 @@ def parse_args():
         type=int,
         default=45,
         help="Max tokens to generate per sample (default: 45)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Decision sensitivity threshold tau in (0, 1) for classifying as FLAGGED. If None, uses model argmax.",
+    )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        default=True,
+        help="Compute and display a multi-threshold sensitivity sweep (tau in [0.10 to 0.50])",
     )
     return parser.parse_args()
 
@@ -218,6 +231,50 @@ def parse_fields(text: str) -> Tuple[str, str, str]:
     return status, category, offending
 
 
+def compute_sweep_table(records: List[Dict[str, Any]], thresholds: List[float] = None) -> List[Dict[str, Any]]:
+    """Compute precision, recall, F1, FPR, and FNR across sensitivity thresholds."""
+    if thresholds is None:
+        thresholds = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
+
+    sweep_results = []
+    total = len(records)
+
+    for tau in thresholds:
+        tp, fp, fn, tn = 0, 0, 0, 0
+        for r in records:
+            gt = r["ground_truth"]["status"]
+            p_flag = r.get("p_flag", 0.5)
+            pred = "FLAGGED" if p_flag >= tau else "SAFE"
+            if gt == "FLAGGED" and pred == "FLAGGED":
+                tp += 1
+            elif gt == "SAFE" and pred == "FLAGGED":
+                fp += 1
+            elif gt == "FLAGGED" and pred == "SAFE":
+                fn += 1
+            elif gt == "SAFE" and pred == "SAFE":
+                tn += 1
+
+        acc = (tp + tn) / total * 100 if total > 0 else 0.0
+        fpr = fp / (fp + tn) * 100 if (fp + tn) > 0 else 0.0
+        fnr = fn / (fn + tp) * 100 if (fn + tp) > 0 else 0.0
+        prec = tp / (tp + fp) * 100 if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn) * 100 if (tp + fn) > 0 else 0.0
+        f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
+
+        sweep_results.append({
+            "threshold": tau,
+            "accuracy": round(acc, 2),
+            "fpr": round(fpr, 2),
+            "fnr": round(fnr, 2),
+            "precision": round(prec, 2),
+            "recall": round(rec, 2),
+            "f1": round(f1, 2),
+            "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        })
+
+    return sweep_results
+
+
 @torch.no_grad()
 def run_evaluation():
     args = parse_args()
@@ -240,6 +297,18 @@ def run_evaluation():
     tokenizer = HFTokenizer("Qwen/Qwen2.5-0.5B")
     model = load_model(ckpt_path, device)
     eos_id = tokenizer.tokenizer.eos_token_id
+
+    # Identify token IDs for SAFE and FLAGGED words dynamically from tokenizer
+    def get_token_id(w: str) -> int:
+        enc = tokenizer.encode(w)
+        if isinstance(enc, torch.Tensor):
+            return enc.flatten()[-1].item()
+        return enc[-1]
+
+    safe_token_ids = list(set([get_token_id(w) for w in ["SAFE", " SAFE", "safe", " safe"]]))
+    flag_token_ids = list(set([get_token_id(w) for w in ["FLAGGED", " FLAGGED", "flagged", " flagged"]]))
+    if args.threshold is not None:
+        print(f"[Inference Mode] Calibrated Safety Thresholding active: tau = {args.threshold:.2f}")
 
     # Read items
     raw_items = []
@@ -305,9 +374,34 @@ def run_evaluation():
         tokens = tokenizer.encode(prompt).unsqueeze(0).to(device)
 
         gen_tokens = []
+        p_flag_score = None
+
         for _ in range(args.max_new_tokens):
             logits = model(tokens)
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            last_logits = logits[:, -1, :]
+
+            # Detect the exact position right after "Status:"
+            cur_decoded = tokenizer.tokenizer.decode(gen_tokens, skip_special_tokens=True) if gen_tokens else ""
+            if "Status:" in cur_decoded and p_flag_score is None:
+                vocab_sz = last_logits.shape[-1]
+                valid_safe = [tid for tid in safe_token_ids if tid < vocab_sz]
+                valid_flag = [tid for tid in flag_token_ids if tid < vocab_sz]
+                z_safe = max(last_logits[0, tid].item() for tid in valid_safe) if valid_safe else -999.0
+                z_flag = max(last_logits[0, tid].item() for tid in valid_flag) if valid_flag else -999.0
+                max_z = max(z_safe, z_flag)
+                exp_safe = math.exp(z_safe - max_z)
+                exp_flag = math.exp(z_flag - max_z)
+                p_flag = exp_flag / (exp_safe + exp_flag)
+                p_flag_score = round(p_flag, 4)
+
+                if args.threshold is not None:
+                    chosen_tid = valid_flag[0] if p_flag >= args.threshold else valid_safe[0]
+                    next_token = torch.tensor([[chosen_tid]], device=device)
+                else:
+                    next_token = torch.argmax(last_logits, dim=-1, keepdim=True)
+            else:
+                next_token = torch.argmax(last_logits, dim=-1, keepdim=True)
+
             tokens = torch.cat([tokens, next_token], dim=1)
             token_id = next_token.item()
             gen_tokens.append(token_id)
@@ -323,6 +417,8 @@ def run_evaluation():
 
         pred_raw = tokenizer.tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
         pred_status, pred_category, pred_offending = parse_fields(pred_raw)
+        if p_flag_score is None:
+            p_flag_score = 1.0 if pred_status == "FLAGGED" else 0.0
 
         # Status match (binary safe vs flagged)
         is_status_correct = (pred_status == gt_status)
@@ -359,6 +455,7 @@ def run_evaluation():
             "id": item["id"],
             "text": text,
             "subcategory": subcat,
+            "p_flag": p_flag_score,
             "ground_truth": {
                 "status": gt_status,
                 "category": gt_cat,
@@ -403,6 +500,7 @@ def run_evaluation():
             "precision": round(prec, 2),
             "recall": round(rec, 2),
             "f1": round(f1, 2),
+            "tp": tp, "fp": fp, "fn": fn,
         }
 
     status_accuracy = (correct_status / total_samples) * 100
@@ -418,6 +516,9 @@ def run_evaluation():
     # False negative rate (toxic text passed as safe)
     fnr = (fn_flag / (fn_flag + tp_flag) * 100) if (fn_flag + tp_flag) > 0 else 0.0
 
+    # Multi-threshold sensitivity sweep
+    sweep_data = compute_sweep_table(detailed_records)
+
     # 1. Save detailed_predictions.jsonl
     pred_path = output_dir / "benchmark_predictions.jsonl"
     with open(pred_path, "w", encoding="utf-8") as f:
@@ -428,6 +529,7 @@ def run_evaluation():
     metrics_path = output_dir / "benchmark_summary.json"
     summary_data = {
         "checkpoint": str(ckpt_path.name),
+        "threshold_mode": args.threshold,
         "total_evaluated": total_samples,
         "elapsed_seconds": round(elapsed, 2),
         "status_accuracy": round(status_accuracy, 2),
@@ -449,6 +551,7 @@ def run_evaluation():
             }
             for k, v in subcat_metrics.items()
         },
+        "sensitivity_sweep": sweep_data,
         "total_misclassifications": len(misclassified_records),
     }
     with open(metrics_path, "w", encoding="utf-8") as f:
@@ -460,6 +563,7 @@ def run_evaluation():
         f.write("# Qwen2.5-0.5B Guardrail Model Benchmark Evaluation Report\n\n")
         f.write(f"- **Evaluated Checkpoint:** `{ckpt_path.name}`\n")
         f.write(f"- **Benchmark Size:** {total_samples} diverse questionnaire items\n")
+        f.write(f"- **Threshold Setting:** `{'Argmax (default)' if args.threshold is None else f'tau = {args.threshold}'}`\n")
         f.write(f"- **Time Elapsed:** {elapsed:.2f}s ({sec_per_sample*1000:.1f} ms/query)\n\n")
         f.write("## 1. Overall Executive Summary\n\n")
         f.write("| Metric | Score |\n")
@@ -481,12 +585,21 @@ def run_evaluation():
         f.write(f"| **Actual SAFE** | {tn_flag} (True Neg) | {fp_flag} (False Pos) |\n")
         f.write(f"| **Actual FLAGGED** | {fn_flag} (False Neg) | {tp_flag} (True Pos) |\n\n")
 
-        f.write("## 4. Misclassified Samples Analysis\n\n")
+        f.write("## 4. Sensitivity Threshold Sweep (Precision-Recall Calibration)\n\n")
+        f.write("| Threshold (tau) | Status Acc (%) | False Pos Rate (%) | False Neg Rate (%) | Precision (%) | Recall (%) | F1-Score (%) |\n")
+        f.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
+        for s in sweep_data:
+            marker = " **(Active)**" if (args.threshold and abs(s['threshold'] - args.threshold) < 1e-4) else ""
+            f.write(f"| `tau = {s['threshold']:.2f}`{marker} | {s['accuracy']:.1f}% | {s['fpr']:.1f}% | {s['fnr']:.1f}% | {s['precision']:.1f}% | {s['recall']:.1f}% | **{s['f1']:.1f}%** |\n")
+        f.write("\n")
+
+        f.write("## 5. Misclassified Samples Analysis\n\n")
         for err in misclassified_records[:15]:
             f.write(f"#### Question #{err['id']} (`{err['subcategory']}`)\n")
             f.write(f"- **Input:** \"{err['text']}\"\n")
             f.write(f"- **Expected:** `{err['ground_truth']['status']}` (`{err['ground_truth']['category']}`)\n")
-            f.write(f"- **Predicted:** `{err['prediction']['status']}` (`{err['prediction']['category']}`)\n\n")
+            f.write(f"- **Predicted:** `{err['prediction']['status']}` (`{err['prediction']['category']}`)\n")
+            f.write(f"- **Estimated Flag Probability ($p_{{flag}}$):** `{err.get('p_flag', 'N/A')}`\n\n")
 
     # 4. Terminal Output
     print("\n" + "=" * 80)
@@ -494,6 +607,8 @@ def run_evaluation():
     print("=" * 80)
     print(f"Total Evaluated:                   {total_samples} samples")
     print(f"Execution Time:                    {elapsed:.2f} seconds ({sec_per_sample*1000:.1f} ms/query)")
+    if args.threshold is not None:
+        print(f"Safety Sensitivity Threshold:      tau = {args.threshold:.2f}")
     print("-" * 80)
     print(f"Binary Safety Accuracy (SAFE/FLAG): {status_accuracy:6.2f}% ({correct_status}/{total_samples})")
     print(f"Exact Category Accuracy:            {category_accuracy:6.2f}% ({correct_category}/{total_samples})")
@@ -514,6 +629,13 @@ def run_evaluation():
     print(f"  True FLAG  -> Predicted SAFE:    {fn_flag:4d}  (Missed violations)")
     print(f"  True FLAG  -> Predicted FLAGGED: {tp_flag:4d}  (Correctly caught violations)")
     print("-" * 80)
+    print("SAFETY SENSITIVITY SWEEP (Calibration Table across Thresholds):")
+    print(f"  {'Threshold (tau)':17s} | {'Status Acc':11s} | {'FPR (False+)':12s} | {'FNR (Missed)':12s} | {'Precision':9s} | {'Recall':8s} | {'F1-Score':8s}")
+    print("  " + "-" * 88)
+    for s in sweep_data:
+        marker = " *" if (args.threshold and abs(s['threshold'] - args.threshold) < 1e-4) else "  "
+        print(f"  tau = {s['threshold']:4.2f}{marker}       | {s['accuracy']:10.1f}% | {s['fpr']:11.1f}% | {s['fnr']:11.1f}% | {s['precision']:8.1f}% | {s['recall']:7.1f}% | {s['f1']:7.1f}%")
+    print("-" * 80)
 
     if misclassified_records:
         print(f"\nDETAILED ERROR ANALYSIS (Displaying top {min(6, len(misclassified_records))} of {len(misclassified_records)} misclassifications):")
@@ -521,15 +643,15 @@ def run_evaluation():
             print(f"\n  [{i}] ID #{err['id']} ({err['subcategory']})")
             print(f"      Text:      \"{err['text'][:75]}...\"")
             print(f"      Expected:  {err['ground_truth']['status']} ({err['ground_truth']['category']})")
-            print(f"      Predicted: {err['prediction']['status']} ({err['prediction']['category']})")
+            print(f"      Predicted: {err['prediction']['status']} ({err['prediction']['category']}) [p_flag = {err.get('p_flag', 'N/A')}]")
     else:
         print("\nFlawless Run: 0 errors detected across all evaluated questions!")
 
     print("\n" + "=" * 80)
     print(f"[Results Saved] Check directory '{output_dir.resolve()}/':")
-    print(f"  1. {metrics_path.name}          (JSON metrics summary)")
+    print(f"  1. {metrics_path.name}          (JSON metrics summary + sweep data)")
     print(f"  2. {report_path.name}           (Markdown benchmark report)")
-    print(f"  3. {pred_path.name}     (Full prediction logs)")
+    print(f"  3. {pred_path.name}     (Full prediction logs with p_flag probabilities)")
     print("=" * 80 + "\n")
 
 

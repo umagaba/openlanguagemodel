@@ -208,6 +208,9 @@ local_test/
 data/
 !postrain/data/
 !postrain/data/benchmark_questionnaire.jsonl
+postrain/data/processed/
+postrain/data/raw/
+postrain/data/normalized/
 examples/**/data/
 *.parquet
 **/logs/
