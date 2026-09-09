@@ -1,0 +1,66 @@
+# Unified multi-label taxonomy the guard model will predict.
+# Every normalized example gets a dict of {label: 0/1} using this key set,
+# regardless of which source's own label scheme it came from.
+labels:
+  - hate_speech
+  - sexual_harassment
+  - explicit_material
+  - mental_health_risk
+  - legal_ambiguity
+  - racial_profiling
+  - none          # explicit negative/benign class — keep plenty of these
+
+# Per-source column -> unified label mapping.
+# threshold: for continuous/ordinal scores, value at/above which -> positive
+source_label_maps:
+  hatexplain:
+    field: label
+    positive_values: ["hatespeech", "offensive"]
+    maps_to: hate_speech
+
+  measuring_hate_speech:
+    field: hate_speech_score
+    threshold: 0.5
+    maps_to: hate_speech
+    secondary:
+      field: identity_attack
+      threshold: 0.5
+      maps_to: racial_profiling
+
+  jigsaw_civil_comments:
+    field: identity_attack
+    threshold: 0.5
+    maps_to: hate_speech
+    secondary:
+      - field: sexual_explicit
+        threshold: 0.5
+        maps_to: sexual_harassment
+      - field: sexual_explicit
+        threshold: 0.7
+        maps_to: explicit_material
+
+  openai_moderation_dataset:
+    field: category
+    value_map:
+      hate: hate_speech
+      hate/threatening: hate_speech
+      harassment: sexual_harassment
+      harassment/threatening: sexual_harassment
+      sexual: explicit_material
+      sexual/minors: explicit_material
+      self-harm: mental_health_risk
+      self-harm/intent: mental_health_risk
+      self-harm/instructions: mental_health_risk
+      violence: none          # out of scope for this classifier's categories
+
+ 
+
+  ieee_cyberbullying_types:
+    field: bullying_type
+    value_map:
+      ethnicity: racial_profiling
+      religion: racial_profiling
+      age: hate_speech
+      gender: hate_speech
+      other_cyberbullying: hate_speech
+      not_cyberbullying: none

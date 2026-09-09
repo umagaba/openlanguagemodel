@@ -1,0 +1,21 @@
+- id: hatexplain
+  hf_id: hatexplain
+  decision: use
+
+- id: measuring_hate_speech
+  hf_id: ucberkeley-dlab/measuring-hate-speech
+  decision: use
+
+- id: jigsaw_civil_comments
+  hf_id: civil_comments
+  decision: use
+
+# Manual datasets without an hf_id (skipped by the downloader per your script)
+- id: openai_moderation_dataset
+  decision: use
+
+- id: contract_ambiguity_singhal2024
+  decision: use
+
+- id: ieee_cyberbullying_types
+  decision: use
