@@ -126,10 +126,17 @@ class SFTTextDataset:
             prompt_text = f"{prompt}\n" if prompt else ""
             completion_text = f"{completion}"
 
-            prompt_ids = self.tokenizer.encode(prompt_text) if prompt_text else []
-            completion_ids = self.tokenizer.encode(completion_text)
+            # Encode tokens cleanly whether tokenizer returns Tensor or list
+            if prompt_text:
+                prompt_enc = self.tokenizer.encode(prompt_text)
+                prompt_ids = prompt_enc.tolist() if torch.is_tensor(prompt_enc) else list(prompt_enc)
+            else:
+                prompt_ids = []
+
+            comp_enc = self.tokenizer.encode(completion_text)
+            completion_ids = comp_enc.tolist() if torch.is_tensor(comp_enc) else list(comp_enc)
             if eos_id is not None:
-                completion_ids = completion_ids + [eos_id]
+                completion_ids.append(eos_id)
 
             full_tokens = prompt_ids + completion_ids
 
